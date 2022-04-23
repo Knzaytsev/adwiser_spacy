@@ -70,13 +70,22 @@ def models(text, test_mode=False):
         errors_pp = []
         all_errors = []
         dep_matcher = DependencyMatcher(vocab=nlp.vocab)
-        present_perfect = [{'RIGHT_ID': 'verb', 'RIGHT_ATTRS': {'TAG': 'VBN'}},
-                           {'LEFT_ID': 'verb', 'REL_OP': '>', 'RIGHT_ID': 'have',
-                            'RIGHT_ATTRS': {'LEMMA': 'have', 'DEP': 'aux', 'TAG': {'IN': ['VBP', 'VBZ']}}}]
-        dep_matcher.add("present_perfect", patterns=[present_perfect])
-        results = dep_matcher(sent)
-        if results:
+        present_perfect = []
+        present_perfect.append([{'RIGHT_ID': 'verb', 'RIGHT_ATTRS': {'TAG': 'VBN'}},
+                            {'LEFT_ID': 'verb', 'REL_OP': '>', 'RIGHT_ID': 'have',
+                            'RIGHT_ATTRS': {'LEMMA': 'have', 'DEP': 'aux', 'TAG': {'IN': ['VBP', 'VBZ']}}}])
 
+        present_perfect.append([{'RIGHT_ID': 'verb', 'RIGHT_ATTRS': {'TAG': {'IN' : ['VBN', 'VBG']}}},
+                            {'LEFT_ID': 'verb', 'REL_OP': '>', 'RIGHT_ID': 'be',
+                            'RIGHT_ATTRS': {'LEMMA': 'be', 'DEP': 'aux', 'TAG': {'IN': ['VBP', 'VBZ', 'VBN']}}},
+                        {'LEFT_ID': 'verb', 'REL_OP': '>', 'RIGHT_ID': 'have',
+                            'RIGHT_ATTRS': {'LEMMA': 'have', 'DEP': 'aux', 'TAG': {'IN': ['VBP', 'VBZ', 'VBN']}}}
+                            ])
+        
+        dep_matcher.add("present_perfect", patterns=present_perfect)
+        results = dep_matcher(sent)
+        
+        if results:
             error_message = 'Present Perfect does not go along with indication of time in the past.'
             all_matches = []
             verbs = []
@@ -96,6 +105,7 @@ def models(text, test_mode=False):
                 all_matches.append(dep_matches[0][1][0])
                 if sent[dep_matches[0][1][0]].head.tag_ == 'VBN':
                     verbs.append(sent[dep_matches[0][1][0]].head)
+
             # in/from/over/between+year
             patt_two = [{'RIGHT_ID': 'prep', 'RIGHT_ATTRS': {'LEMMA': {'IN': ['at', 'over', 'in']}}},
                         {'LEFT_ID': 'prep', 'REL_OP': '>', 'RIGHT_ID': 'year',
@@ -163,18 +173,64 @@ def models(text, test_mode=False):
 
             # have + not от каждого глагола + ошибки
             for verb in verbs:
-                if verb.tag_ == 'VBN':
 
+                if verb.tag_ == 'VBN':
+                    
                     have_not = [have for have in verb.children if have.lemma_ == 'have' and have.dep_ == 'aux'
                                 and have.tag_ in {'VBZ', 'VBP'}]
                     if have_not:
+                        
                         have_not = have_not[0]
                         errors_pp.append(have_not)
                         not_ = [i for i in have_not.children if i.dep_ == 'neg' and i.norm_ == 'not']
                         if not_:
                             errors_pp.append(not_)
                         all_errors.append([find_span(errors_pp), error_message])
+
+            wrong_features = find_wrong_verb_features(results, sent)
+    
+            for feature in wrong_features:
+                verb, error = feature
+                all_errors.append([find_span([verb]), error])
+
+
         return all_errors
+
+    def find_wrong_verb_features(pp, sent):
+        # проверить лицо и число у слова и глагола
+        errors = []
+        for match in pp:
+            have_index = match[1][-1]
+            have_verb = sent[have_index]
+            verb = have_verb.head
+            children = verb.children
+            subj = None
+            
+            for child in children:
+                if child.dep_ in ['relcl', 'nsubj', 'nsubjpass']:
+                    subj = child
+                    break
+            
+            if subj == None:
+                subj = verb.head
+            
+            have_number = have_verb.morph.get('Number')
+            subj_number = subj.morph.get('Number')
+            have_person = have_verb.morph.get('Person')
+            subj_person = subj.morph.get('Person')
+            
+            is_1_2_person = subj_person and (subj_person[0] == '1' or subj_person[0] == '2')
+            is_plural = subj_number and subj_number[0] == 'Plur'
+            is_sing = subj_number and subj_number[0] == 'Sing'
+            
+            if (is_1_2_person or is_plural) and have_verb.text != 'have':
+                errors.append((have_verb, 'Probably you should write have.'))
+                continue 
+            
+            if not is_1_2_person and is_sing and have_verb.text != 'has':
+                errors.append((have_verb, 'Probably you should write has'))
+                continue 
+        return errors
 
     def inversion(sent):
 
@@ -660,6 +716,7 @@ def models(text, test_mode=False):
         sentence_dots = re.sub(r'\!', '! ', sentence_dots)
         sentence_dots = re.sub(r'\?', '? ', sentence_dots)
         sentence_dots = re.sub(r'\s\s', ' ', sentence_dots)
+        sentence_dots = re.sub(r"'ve", ' have', sentence_dots)
         return sentence_dots
 
     def apply_models(sentence_process, test_mode):
@@ -700,6 +757,7 @@ def models(text, test_mode=False):
 
 def generate_text(text):
     text_, errors = models(text)
+    print(errors)
     annotated_text, comments = output_maker(text_, errors)
     return annotated_text, comments
 
@@ -713,6 +771,30 @@ def generate_text(text):
 #     for t in d:
 #         print(t, t.head, t.dep_, t.tag_, t.pos_, t._.tree_tag)
 #
-print(generate_text('If I am there, there wouldn\'t be..'))
+#print(generate_text('If I am there, there wouldn\'t be..'))
+
+'''
+print(generate_text('I have not done it recently from 1992'))
+print(generate_text('I have done it since 2 years ago'))
+print(generate_text('I have to make new file'))
+
+
+print(generate_text('it has happened in 2010'))
+print(generate_text('it has been seen in 2003'))
+print(generate_text('I have got it in 1999'))
+print(generate_text('I have got it in 2 versions'))
+print(generate_text('I have got it in 1000 versions'))
+print(generate_text('I have gotten it in 1000 versions'))
+print(generate_text('I have it written in 1000 versions'))
+print(generate_text('I have got to go back in 2005'))
+
+print(generate_text('I have seen it between 2005 and 2035'))
+
+#!!!!!!!!!!!!!!!!!!
+print(generate_text('I have seen it over the recent years'))
+
+print(generate_text('I have seen it last year'))
+
 # 12 % nummod CD NUM CRD
 # sixteen percent nummod CD NUM CRD
+'''
